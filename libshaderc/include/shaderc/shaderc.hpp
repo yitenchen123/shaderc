@@ -317,6 +317,10 @@ class CompileOptions {
     shaderc_compile_options_set_preserve_bindings(options_, preserve_bindings);
   }
 
+  void SetMaxIdBound(uint32_t max_id_bound) {
+    shaderc_compile_options_set_max_id_bound(options_, max_id_bound);
+  }
+
   // Sets whether the compiler automatically assigns locations to
   // uniform variables that don't have explicit locations.
   void SetAutoMapLocations(bool auto_map) {
@@ -365,7 +369,7 @@ class CompileOptions {
     shaderc_compile_options_set_invert_y(options_, enable);
   }
 
-  // Sets whether the compiler should generates code for max an min which,
+  // Sets whether the compiler should generate code for max and min which,
   // if given a NaN operand, will return the other operand. Similarly, the
   // clamp builtin will favour the non-NaN operands, as if clamp were
   // implemented as a composition of max and min.

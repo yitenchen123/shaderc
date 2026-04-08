@@ -40,6 +40,8 @@ spv_target_env GetSpirvToolsTargetEnv(Compiler::TargetEnv env,
           return SPV_ENV_VULKAN_1_2;
         case Compiler::TargetEnvVersion::Vulkan_1_3:
           return SPV_ENV_VULKAN_1_3;
+        case Compiler::TargetEnvVersion::Vulkan_1_4:
+          return SPV_ENV_VULKAN_1_4;
         default:
           break;
       }
@@ -126,6 +128,11 @@ bool SpirvToolsOptimize(Compiler::TargetEnv env,
   val_opts.SetRelaxLogicalPointer(true);
   // This uses relaxed rules for pre-legalized HLSL.
   val_opts.SetBeforeHlslLegalization(true);
+  // Don't use friendly names when printing validation errors.
+  // It incurs a high startup cost whether or not there is an
+  // error. Validation failures are compiler bugs, and so they
+  // should be rare anyway.
+  val_opts.SetFriendlyNames(false);
 
   // Set additional optimizer options.
   optimizer_options.set_validator_options(val_opts);
