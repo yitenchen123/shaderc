@@ -1,5 +1,5 @@
 name: iOS build
-true:
+on:
   push:
     branches:
     - main
