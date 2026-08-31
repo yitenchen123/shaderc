@@ -20,16 +20,30 @@ jobs:
     # The type of runner that the job will run on
     runs-on: macos-14
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    # Steps represent a sequence of tasks that your job will perform
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
 
       # Runs a set of commands using the runners shell
+      - name: Sync dependencies
+        run: |
+          ./utils/git-sync-deps
+
+      # Fix a null-pointer dereference in glslang that crashes Minecraft 26.3
+      # on iOS. See patches/fix_glslang_lvalue_null.py for the full analysis.
+      # The script exits non-zero if its anchors are missing, so a silent
+      # no-op can never masquerade as a successful patch.
+      - name: Apply glslang l-value null-deref fix
+        run: |
+          set -e
+          python3 patches/fix_glslang_lvalue_null.py third_party/glslang
+          echo "--- verifying ---"
+          grep -n -A2 "TIntermAggregate \*aggrNode = rightNode" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp
+
       - name: Build shaderc
         run: |
           # wget https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake
-          ./utils/git-sync-deps
           # -DCMAKE_TOOLCHAIN_FILE=$PWD/ios.toolchain.cmake
           # Unable to set CMAKE_SYSTEM_NAME to iOS, doing live patch instead
           sed -i'' -e 's/iOS/Darwin/g' third_party/spirv-tools/tools/CMakeLists.txt
