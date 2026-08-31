@@ -1,108 +1,85 @@
-# This is a basic workflow to help you get started with Actions
-
 name: iOS build
-
-# Controls when the workflow will run
-on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
+true:
   push:
-    branches: [ "main" ]
+    branches:
+    - main
   pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
-
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+    branches:
+    - main
+  workflow_dispatch: null
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
     runs-on: macos-14
-
-    # Steps represent a sequence of tasks that your job will perform
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v3
+    - uses: actions/checkout@v3
+    - name: Diagnose environment
+      run: "{\n  echo \"=== runner ===\"\n  sw_vers || true\n  echo \"uname: $(uname\
+        \ -a)\"\n  echo \"=== toolchain ===\"\n  echo \"cmake: $(cmake --version 2>&1\
+        \ | head -1)\"\n  echo \"ninja: $(ninja --version 2>&1 | head -1)\"\n  echo\
+        \ \"python: $(python --version 2>&1 | head -1)\"\n  echo \"python3: $(python3\
+        \ --version 2>&1 | head -1)\"\n  echo \"xcode-select: $(xcode-select -p 2>&1)\"\
+        \n  echo \"=== SDKs ===\"\n  xcrun --sdk iphoneos --show-sdk-path 2>&1 ||\
+        \ echo \"  (iphoneos SDK lookup FAILED)\"\n  xcodebuild -showsdks 2>&1 | head\
+        \ -20 || true\n  echo \"=== git ===\"\n  git --version\n} 2>&1 | tee diagnose.log\n"
+    - name: Sync dependencies
+      run: "set -o pipefail\n./utils/git-sync-deps 2>&1 | tee sync.log\necho \"===\
+        \ third_party after sync ===\"\nfor d in third_party/*/; do\n  echo \"  $d\
+        \ -> $(find \"$d\" -type f 2>/dev/null | wc -l) files\"\ndone\necho \"glslang\
+        \ ParseHelper.cpp: $(test -f third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp\
+        \ && echo present || echo MISSING)\"\n"
+    - name: Apply glslang l-value null-deref fix
+      run: 'set -e
 
-      # Environment / dependency diagnostics. Cheap, and makes a configuration
-      # failure diagnosable without needing the run log.
-      - name: Diagnose environment
-        run: |
-          {
-            echo "=== runner ==="
-            sw_vers || true
-            echo "uname: $(uname -a)"
-            echo "=== toolchain ==="
-            echo "cmake: $(cmake --version 2>&1 | head -1)"
-            echo "ninja: $(ninja --version 2>&1 | head -1)"
-            echo "python: $(python --version 2>&1 | head -1)"
-            echo "python3: $(python3 --version 2>&1 | head -1)"
-            echo "xcode-select: $(xcode-select -p 2>&1)"
-            echo "=== SDKs ==="
-            xcrun --sdk iphoneos --show-sdk-path 2>&1 || echo "  (iphoneos SDK lookup FAILED)"
-            xcodebuild -showsdks 2>&1 | head -20 || true
-            echo "=== git ==="
-            git --version
-          } 2>&1 | tee diagnose.log
+        python3 patches/fix_glslang_lvalue_null.py third_party/glslang
 
-      # Runs a set of commands using the runners shell
-      - name: Sync dependencies
-        run: |
-          set -o pipefail
-          ./utils/git-sync-deps 2>&1 | tee sync.log
-          echo "=== third_party after sync ==="
-          for d in third_party/*/; do
-            echo "  $d -> $(find "$d" -type f 2>/dev/null | wc -l) files"
-          done
-          echo "glslang ParseHelper.cpp: $(test -f third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp && echo present || echo MISSING)"
+        echo "--- verifying ---"
 
-      # Fix a null-pointer dereference in glslang that crashes Minecraft 26.3
-      # on iOS. See patches/fix_glslang_lvalue_null.py for the full analysis.
-      # The script exits non-zero if its anchors are missing, so a silent
-      # no-op can never masquerade as a successful patch.
-      - name: Apply glslang l-value null-deref fix
-        run: |
-          set -e
-          python3 patches/fix_glslang_lvalue_null.py third_party/glslang
-          echo "--- verifying ---"
-          grep -n -A2 "TIntermAggregate \*aggrNode = rightNode" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp
+        grep -n -A2 "TIntermAggregate \*aggrNode = rightNode" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp
 
-      - name: Build shaderc
-        id: build_shaderc
-        run: |
-          set -o pipefail
-          {
-            # wget https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake
-            # -DCMAKE_TOOLCHAIN_FILE=$PWD/ios.toolchain.cmake
-            # Unable to set CMAKE_SYSTEM_NAME to iOS, doing live patch instead
-            sed -i'' -e 's/iOS/Darwin/g' third_party/spirv-tools/tools/CMakeLists.txt
-            cmake -B build \
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CROSSCOMPILING=true \
-              -DCMAKE_SYSTEM_NAME=Darwin \
-              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              -DCMAKE_OSX_ARCHITECTURES=arm64 \
-              -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
-              -DCMAKE_C_FLAGS="-arch arm64 -miphoneos-version-min=12.0" \
-              -DSHADERC_SKIP_EXAMPLES=ON \
-              -DSHADERC_SKIP_TESTS=ON
-            cmake --build build --config RelWithDebInfo -- -j8
-          } 2>&1 | tee build.log
+        '
+    - name: Build shaderc
+      id: build_shaderc
+      run: "set -o pipefail\n{\n  # wget https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake\n\
+        \  # -DCMAKE_TOOLCHAIN_FILE=$PWD/ios.toolchain.cmake\n  # Unable to set CMAKE_SYSTEM_NAME\
+        \ to iOS, doing live patch instead\n  sed -i'' -e 's/iOS/Darwin/g' third_party/spirv-tools/tools/CMakeLists.txt\n\
+        \  cmake -B build \\\n    -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CROSSCOMPILING=true\
+        \ \\\n    -DCMAKE_SYSTEM_NAME=Darwin \\\n    -DCMAKE_SYSTEM_PROCESSOR=aarch64\
+        \ \\\n    -DCMAKE_OSX_ARCHITECTURES=arm64 \\\n    -DCMAKE_OSX_SYSROOT=\"$(xcrun\
+        \ --sdk iphoneos --show-sdk-path)\" \\\n    -DCMAKE_C_FLAGS=\"-arch arm64\
+        \ -miphoneos-version-min=12.0\" \\\n    -DSHADERC_SKIP_EXAMPLES=ON \\\n  \
+        \  -DSHADERC_SKIP_TESTS=ON\n  cmake --build build --config RelWithDebInfo\
+        \ -- -j8\n} 2>&1 | tee build.log\n"
+    - name: Upload build log
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log
+        path: 'diagnose.log
 
-      # Uploaded unconditionally: when the build step fails we still need the
-      # output, and downloading run logs is not possible from here.
-      - name: Upload build log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log
-          path: |
-            diagnose.log
-            sync.log
-            build.log
+          sync.log
 
-      - name: Upload libshaderc
-        uses: actions/upload-artifact@v4
-        with:
-          name: libshaderc
-          path: build/libshaderc/*.dylib
+          build.log
+
+          '
+    - name: Upload libshaderc
+      uses: actions/upload-artifact@v4
+      with:
+        name: libshaderc
+        path: build/libshaderc/*.dylib
+    - name: Publish dylib to dist branch
+      if: success()
+      run: "set -e\n          DYLIB=$(ls build/libshaderc/*.dylib | head -1)\n   \
+        \       echo \"dylib: $DYLIB\"\n          echo \"size: $(stat -f%z \"$DYLIB\"\
+        ) bytes\"\n          echo \"arch: $(lipo -archs \"$DYLIB\" 2>/dev/null ||\
+        \ echo unknown)\"\n          git config user.name \"github-actions[bot]\"\n\
+        \          git config user.email \"github-actions[bot]@users.noreply.github.com\"\
+        \n          if git ls-remote --exit-code --heads origin dist >/dev/null 2>&1;\
+        \ then\n            git fetch origin dist --depth=1\n            git checkout\
+        \ -B dist origin/dist\n          else\n            git checkout --orphan dist\n\
+        \            git rm -rf . >/dev/null 2>&1 || true\n          fi\n        \
+        \  mkdir -p .\n          cp \"$DYLIB\" ./libshaderc.dylib\n          git add\
+        \ -f ./libshaderc.dylib\n          if git diff --cached --quiet; then\n  \
+        \          echo \"no change, skip commit\"\n          else\n            git\
+        \ commit -m \"libshaderc.dylib: patched build with glslang l-value null fix\"\
+        \n            git push origin dist\n            echo \"published to dist branch\"\
+        \n          fi"
