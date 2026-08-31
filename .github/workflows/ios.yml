@@ -25,10 +25,37 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v3
 
+      # Environment / dependency diagnostics. Cheap, and makes a configuration
+      # failure diagnosable without needing the run log.
+      - name: Diagnose environment
+        run: |
+          {
+            echo "=== runner ==="
+            sw_vers || true
+            echo "uname: $(uname -a)"
+            echo "=== toolchain ==="
+            echo "cmake: $(cmake --version 2>&1 | head -1)"
+            echo "ninja: $(ninja --version 2>&1 | head -1)"
+            echo "python: $(python --version 2>&1 | head -1)"
+            echo "python3: $(python3 --version 2>&1 | head -1)"
+            echo "xcode-select: $(xcode-select -p 2>&1)"
+            echo "=== SDKs ==="
+            xcrun --sdk iphoneos --show-sdk-path 2>&1 || echo "  (iphoneos SDK lookup FAILED)"
+            xcodebuild -showsdks 2>&1 | head -20 || true
+            echo "=== git ==="
+            git --version
+          } 2>&1 | tee diagnose.log
+
       # Runs a set of commands using the runners shell
       - name: Sync dependencies
         run: |
-          ./utils/git-sync-deps
+          set -o pipefail
+          ./utils/git-sync-deps 2>&1 | tee sync.log
+          echo "=== third_party after sync ==="
+          for d in third_party/*/; do
+            echo "  $d -> $(find "$d" -type f 2>/dev/null | wc -l) files"
+          done
+          echo "glslang ParseHelper.cpp: $(test -f third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp && echo present || echo MISSING)"
 
       # Fix a null-pointer dereference in glslang that crashes Minecraft 26.3
       # on iOS. See patches/fix_glslang_lvalue_null.py for the full analysis.
@@ -42,21 +69,37 @@ jobs:
           grep -n -A2 "TIntermAggregate \*aggrNode = rightNode" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp
 
       - name: Build shaderc
+        id: build_shaderc
         run: |
-          # wget https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake
-          # -DCMAKE_TOOLCHAIN_FILE=$PWD/ios.toolchain.cmake
-          # Unable to set CMAKE_SYSTEM_NAME to iOS, doing live patch instead
-          sed -i'' -e 's/iOS/Darwin/g' third_party/spirv-tools/tools/CMakeLists.txt
-          cmake -B build \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CROSSCOMPILING=true \
-            -DCMAKE_SYSTEM_NAME=Darwin \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
-            -DCMAKE_C_FLAGS="-arch arm64 -miphoneos-version-min=12.0" \
-            -DSHADERC_SKIP_EXAMPLES=ON \
-            -DSHADERC_SKIP_TESTS=ON
-          cmake --build build --config RelWithDebInfo -- -j8
+          set -o pipefail
+          {
+            # wget https://raw.githubusercontent.com/leetal/ios-cmake/master/ios.toolchain.cmake
+            # -DCMAKE_TOOLCHAIN_FILE=$PWD/ios.toolchain.cmake
+            # Unable to set CMAKE_SYSTEM_NAME to iOS, doing live patch instead
+            sed -i'' -e 's/iOS/Darwin/g' third_party/spirv-tools/tools/CMakeLists.txt
+            cmake -B build \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CROSSCOMPILING=true \
+              -DCMAKE_SYSTEM_NAME=Darwin \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+              -DCMAKE_C_FLAGS="-arch arm64 -miphoneos-version-min=12.0" \
+              -DSHADERC_SKIP_EXAMPLES=ON \
+              -DSHADERC_SKIP_TESTS=ON
+            cmake --build build --config RelWithDebInfo -- -j8
+          } 2>&1 | tee build.log
+
+      # Uploaded unconditionally: when the build step fails we still need the
+      # output, and downloading run logs is not possible from here.
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: |
+            diagnose.log
+            sync.log
+            build.log
 
       - name: Upload libshaderc
         uses: actions/upload-artifact@v4
