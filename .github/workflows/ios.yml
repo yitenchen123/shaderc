@@ -37,12 +37,25 @@ jobs:
           echo "  $d -> $(find "$d" -type f 2>/dev/null | wc -l) files"
         done
         echo "glslang ParseHelper.cpp: $(test -f third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp && echo present || echo MISSING)"
-    - name: Apply glslang l-value null-deref fix
+        echo "glslang GlslangToSpv.cpp: $(test -f third_party/glslang/SPIRV/GlslangToSpv.cpp && echo present || echo MISSING)"
+    - name: Apply glslang swizzle null-deref fixes
       run: |
         set -e
-        python3 patches/fix_glslang_lvalue_null.py third_party/glslang
-        echo "--- verifying ---"
-        grep -n -B1 -A3 "aggrNode == nullptr" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp || true
+        python3 patches/patch_glslang_swizzle.py third_party/glslang
+        echo "--- verifying ParseHelper.cpp (lValueErrorCheck) ---"
+        grep -n -B1 -A3 "aggrNode == nullptr" third_party/glslang/glslang/MachineIndependent/ParseHelper.cpp || echo "PROBLEM: ParseHelper guard missing"
+        echo "--- verifying GlslangToSpv.cpp (convertSwizzle) ---"
+        grep -n "convertSwizzleSafe" third_party/glslang/SPIRV/GlslangToSpv.cpp || echo "PROBLEM: convertSwizzleSafe missing"
+        echo "--- unguarded call sites must be gone ---"
+        if grep -n "convertSwizzle(\*node->getRight()->getAsAggregate()" third_party/glslang/SPIRV/GlslangToSpv.cpp; then
+          echo "PROBLEM: unguarded visitBinary site still present"
+          exit 1
+        fi
+        if grep -n "convertSwizzle(\*node.getAsBinaryNode()->getRight()->getAsAggregate()" third_party/glslang/SPIRV/GlslangToSpv.cpp; then
+          echo "PROBLEM: unguarded createInvertedSwizzle site still present"
+          exit 1
+        fi
+        echo "all guards verified"
     - name: Build shaderc
       id: build_shaderc
       run: |
@@ -103,7 +116,7 @@ jobs:
         if git diff --cached --quiet; then
           echo "no change, skip commit"
         else
-          git commit -m "chore: publish patched libshaderc (glslang l-value null fix)"
+          git commit -m "chore: publish patched libshaderc (glslang swizzle null fixes)"
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/yitenchen123/shaderc.git" HEAD:dist
           echo "published to dist branch"
         fi
