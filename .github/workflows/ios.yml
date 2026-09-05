@@ -138,3 +138,28 @@ jobs:
           git push --force "https://x-access-token:${GH_TOKEN}@github.com/yitenchen123/shaderc.git" HEAD:dist
           echo "published to dist branch"
         fi
+    - name: Publish build log to dist (always)
+      if: always()
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -e
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git fetch origin dist 2>/dev/null || true
+        git checkout -B dist 2>/dev/null || git checkout dist
+        # keep only the tail: full log is tens of MB
+        if [ -f build.log ]; then
+          echo "=== tail of build.log ===" > build-error.txt
+          tail -n 120 build.log >> build-error.txt
+        else
+          echo "no build.log produced" > build-error.txt
+        fi
+        git add -f build-error.txt
+        if git diff --cached --quiet; then
+          echo "log unchanged"
+        else
+          git commit -m "ci: publish build log tail (run $GITHUB_RUN_NUMBER)"
+          git push --force "https://x-access-token:${GH_TOKEN}@github.com/yitenchen123/shaderc.git" HEAD:dist
+          echo "published build-error.txt"
+        fi
