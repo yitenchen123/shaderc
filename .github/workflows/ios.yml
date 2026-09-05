@@ -70,6 +70,7 @@ jobs:
             -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
             -DCMAKE_C_FLAGS="-arch arm64 -miphoneos-version-min=12.0 -fvisibility=hidden" \
             -DCMAKE_CXX_FLAGS="-arch arm64 -miphoneos-version-min=12.0 -fvisibility=hidden -fvisibility-inlines-hidden" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-exported_symbol,_shaderc_*" \
             -DSHADERC_SKIP_EXAMPLES=ON \
             -DSHADERC_SKIP_TESTS=ON
           cmake --build build --config RelWithDebInfo -- -j8
@@ -82,14 +83,26 @@ jobs:
         echo "dylib: $DYLIB"
         echo "size: $(stat -f%z "$DYLIB") bytes"
         echo "arch: $(lipo -archs "$DYLIB" 2>/dev/null || echo unknown)"
-        echo "=== max_id_bound (required by LWJGL 3.4.x) ==="
-        nm -gU "$DYLIB" 2>/dev/null | grep -c "shaderc_compile_options_set_max_id_bound" || echo "0 (PROBLEM)"
-        echo "=== total shaderc C API ==="
-        nm -gU "$DYLIB" 2>/dev/null | grep -c "shaderc_" || true
-        echo "=== exported glslang symbols (MUST be 0 - otherwise collides with MobileGL copy) ===
-        nm -gU "$DYLIB" 2>/dev/null | grep -c "glslang" || echo "0 OK"
-        echo "=== exported spirv-tools symbols (MUST be 0) ===
-        nm -gU "$DYLIB" 2>/dev/null | grep -ci "spvtools" || echo "0 OK"
+        EXPF=$(mktemp)
+        nm -gU "$DYLIB" > "$EXPF" 2>/dev/null || true
+        C=$(grep -c "_shaderc_" "$EXPF" || true)
+        G=$(grep -c "glslang" "$EXPF" || true)
+        S=$(grep -ci "spvtools" "$EXPF" || true)
+        echo "=== shaderc C API exported (need >= 40): ${C:-0}"
+        echo "=== glslang exported (MUST be 0): ${G:-0}"
+        echo "=== spirv-tools exported (MUST be 0): ${S:-0}"
+        echo "=== total exported: $(wc -l < "$EXPF" | tr -d ' ')"
+        if ! grep -q "shaderc_compile_options_set_max_id_bound" "$EXPF"; then
+          echo "FATAL: max_id_bound missing (required by LWJGL 3.4.x)"
+          exit 1
+        fi
+        if [ "${G:-0}" -ne 0 ] || [ "${S:-0}" -ne 0 ] || [ "${C:-0}" -lt 40 ]; then
+          echo "FATAL: symbol export policy violated."
+          echo "  glslang / spirv-tools symbols must NOT be exported: they collide"
+          echo "  with MobileGL's own copies at dyld bind time (ODR -> layout mismatch)."
+          exit 1
+        fi
+        echo "symbol export policy OK (only _shaderc_* visible to dyld)"
         echo "=== install name ==="
         otool -D "$DYLIB" 2>/dev/null || true
     - name: Upload build log
